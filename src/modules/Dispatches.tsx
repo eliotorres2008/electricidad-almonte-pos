@@ -1,13 +1,15 @@
 import { useState, useMemo } from 'react';
-import { Package, Plus, Search, Trash2, CheckCircle2, XCircle, ClipboardList, ArrowLeftRight, AlertTriangle, ShoppingCart } from 'lucide-react';
+import { Package, Plus, Search, Trash2, CheckCircle2, XCircle, ClipboardList, AlertTriangle, ShoppingCart, Pencil } from 'lucide-react';
 import type { Dispatch, DispatchItem, DispatchStatus, UnitType, CartItem, Product } from '@/types';
 import { useApp } from '@/context/AppContext';
 import { Modal } from '@/components/Modal';
 import { formatCurrency, genId, unitPrice } from '@/lib/format';
 
-// Shared dark-theme select styling for all dropdowns in this module.
-const SELECT_DARK = 'bg-neutral-800 text-white border border-neutral-700 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer';
-const SELECT_DARK_SM = 'bg-neutral-800 text-white border border-neutral-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer';
+// Light-theme styling for compact number inputs inside tables.
+const NUM_LIGHT = 'bg-slate-50 text-gray-900 border border-gray-300 rounded px-2 py-1 text-center font-semibold w-16 focus:ring-2 focus:ring-amber-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
+// Light-theme styling for compact selects.
+const SELECT_LIGHT_SM = 'bg-slate-50 text-gray-900 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer';
+const SELECT_LIGHT = 'bg-slate-50 text-gray-900 border border-gray-300 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer w-full';
 
 type DraftLine = {
   productId: string;
@@ -22,10 +24,12 @@ type DraftLine = {
 
 export function Dispatches() {
   const app = useApp();
-  const { dispatches, products, employees, categories, createDispatch, prepareDispatchLiquidation, finalizeDispatch, cancelDispatch, addAudit, setPendingDispatchCart } = app;
+  const { dispatches, products, employees, categories, createDispatch, updateDispatch, prepareDispatchLiquidation, finalizeDispatch, cancelDispatch, addAudit, setPendingDispatchCart } = app;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [liquidateId, setLiquidateId] = useState<string | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<Dispatch | null>(null);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'todos' | DispatchStatus>('todos');
 
@@ -38,6 +42,13 @@ export function Dispatches() {
 
   // Liquidation modal state
   const [liqItems, setLiqItems] = useState<DispatchItem[]>([]);
+
+  // Edit modal state
+  const [editTechId, setEditTechId] = useState('');
+  const [editClientName, setEditClientName] = useState('');
+  const [editItems, setEditItems] = useState<DispatchItem[]>([]);
+  const [editProductQuery, setEditProductQuery] = useState('');
+  const [editProductCat, setEditProductCat] = useState('Todas');
 
   const activeEmployees = useMemo(() => employees.filter((e) => e.active), [employees]);
 
@@ -57,6 +68,14 @@ export function Dispatches() {
       (!q || p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q)),
     ).slice(0, 12);
   }, [products, productQuery, productCat]);
+
+  const editableProducts = useMemo(() => {
+    const q = editProductQuery.trim().toLowerCase();
+    return products.filter((p) =>
+      (editProductCat === 'Todas' || p.category === editProductCat) &&
+      (!q || p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q)),
+    ).slice(0, 12);
+  }, [products, editProductQuery, editProductCat]);
 
   const resetCreate = () => {
     setTechId('');
@@ -138,8 +157,6 @@ export function Dispatches() {
     const usedItems = liqItems.filter((i) => i.usedQty > 0);
     if (usedItems.length === 0) return;
 
-    // Build a CartItem for each used material, matching the real product so Sales
-    // can apply unit pricing, ITBIS (products only), and commissions correctly.
     const cart: CartItem[] = usedItems.map((i) => {
       const prod = products.find((p) => p.id === i.productId) ?? {
         id: i.productId, code: i.productCode, name: i.productName, category: 'Servicio',
@@ -148,10 +165,7 @@ export function Dispatches() {
       return { product: prod, qty: i.usedQty, unit: i.unit };
     });
 
-    // Restore returned stock to inventory immediately, but do NOT mark as liquidado yet.
     prepareDispatchLiquidation(liquidateId, liqItems);
-
-    // Hand the cart off to Sales. finalizeDispatch will be called when the sale completes.
     setPendingDispatchCart({ cart, customerName: d.customerName, dispatchId: liquidateId });
     setLiquidateId(null);
     setLiqItems([]);
@@ -161,6 +175,51 @@ export function Dispatches() {
   const doCancel = (id: string) => {
     cancelDispatch(id);
     addAudit(`Despacho cancelado — ${id}`);
+  };
+
+  // ===== Edit modal helpers =====
+  const openEdit = (d: Dispatch) => {
+    setEditId(d.id);
+    setEditTechId(d.employeeId);
+    setEditClientName(d.customerName);
+    setEditItems(d.items.map((i) => ({ ...i })));
+    setEditProductQuery('');
+    setEditProductCat('Todas');
+  };
+
+  const editAddProduct = (productId: string) => {
+    const p = products.find((x) => x.id === productId);
+    if (!p) return;
+    if (editItems.some((i) => i.productId === productId)) return;
+    setEditItems((prev) => [...prev, {
+      productId: p.id, productName: p.name, productCode: p.code,
+      unit: p.unit, dispatchedQty: 0, price: unitPrice(p, p.unit), usedQty: 0, returnedQty: 0,
+    }]);
+    setEditProductQuery('');
+  };
+
+  const editRemoveProduct = (productId: string) => {
+    setEditItems((prev) => prev.filter((i) => i.productId !== productId));
+  };
+
+  const editSetQty = (productId: string, qty: number) => {
+    setEditItems((prev) => prev.map((i) => i.productId === productId ? { ...i, dispatchedQty: qty } : i));
+  };
+
+  const doSaveEdit = () => {
+    if (!editId) return;
+    const tech = activeEmployees.find((e) => e.id === editTechId);
+    const techName = tech ? `${tech.firstName} ${tech.lastName}`.trim() : 'Técnico';
+    const validItems = editItems.filter((i) => i.dispatchedQty > 0);
+    if (validItems.length === 0) return;
+    updateDispatch(editId, {
+      employeeId: editTechId,
+      employeeName: techName,
+      customerName: editClientName.trim() || 'Sin cliente',
+      items: validItems,
+    });
+    setEditId(null);
+    setEditItems([]);
   };
 
   const statusBadge = (s: DispatchStatus) => {
@@ -174,6 +233,7 @@ export function Dispatches() {
   };
 
   const liqSubtotal = liqItems.filter((i) => i.usedQty > 0).reduce((s, i) => s + i.usedQty * i.price, 0);
+  const canSaveEdit = !!editTechId && editItems.some((i) => i.dispatchedQty > 0);
 
   return (
     <div className="space-y-4">
@@ -227,10 +287,13 @@ export function Dispatches() {
                     <div className="flex justify-end gap-1">
                       {d.status === 'en_obra' && (
                         <>
+                          <button onClick={() => openEdit(d)} className="p-1.5 rounded-lg text-neutral-400 hover:text-brand-500 hover:bg-brand-500/10 transition" title="Editar despacho">
+                            <Pencil size={16} />
+                          </button>
                           <button onClick={() => openLiquidate(d)} className="btn-ghost px-3 py-1.5 text-xs" title="Liquidar despacho">
                             <CheckCircle2 size={14} /> Liquidar
                           </button>
-                          <button onClick={() => doCancel(d.id)} className="p-1.5 rounded-lg text-neutral-400 hover:text-red-500 hover:bg-red-500/10 transition" title="Cancelar despacho">
+                          <button onClick={() => setCancelTarget(d)} className="p-1.5 rounded-lg text-neutral-400 hover:text-red-500 hover:bg-red-500/10 transition" title="Cancelar despacho">
                             <XCircle size={16} />
                           </button>
                         </>
@@ -280,7 +343,7 @@ export function Dispatches() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">Técnico / Empleado Asignado</label>
-              <select value={techId} onChange={(e) => setTechId(e.target.value)} className={SELECT_DARK + ' w-full'}>
+              <select value={techId} onChange={(e) => setTechId(e.target.value)} className={SELECT_LIGHT}>
                 <option value="">Seleccionar técnico...</option>
                 {activeEmployees.map((e) => (
                   <option key={e.id} value={e.id}>{e.firstName} {e.lastName} — {e.role}</option>
@@ -304,7 +367,7 @@ export function Dispatches() {
                 <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
                 <input value={productQuery} onChange={(e) => setProductQuery(e.target.value)} placeholder="Buscar por nombre o SKU..." className="input pl-11" />
               </div>
-              <select value={productCat} onChange={(e) => setProductCat(e.target.value)} className={SELECT_DARK_SM + ' whitespace-nowrap'}>
+              <select value={productCat} onChange={(e) => setProductCat(e.target.value)} className={SELECT_LIGHT_SM + ' whitespace-nowrap'}>
                 <option value="Todas">Todas las categorías</option>
                 {categories.map((c) => (
                   <option key={c} value={c}>{c}</option>
@@ -371,7 +434,7 @@ export function Dispatches() {
                             min={0}
                             max={l.available}
                             placeholder="0"
-                            className={`bg-neutral-800 text-white border rounded px-2 py-1 text-center font-semibold w-16 focus:ring-2 focus:ring-amber-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${over ? 'border-red-500' : 'border-neutral-700'}`}
+                            className={`${NUM_LIGHT} ${over ? '!border-red-500' : ''}`}
                           />
                         </td>
                         <td className="px-3 py-2 text-right">
@@ -453,7 +516,7 @@ export function Dispatches() {
                         min={0}
                         max={i.dispatchedQty}
                         placeholder="0"
-                        className="bg-neutral-800 text-white border border-neutral-700 rounded px-2 py-1 text-center font-semibold w-16 focus:ring-2 focus:ring-amber-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className={NUM_LIGHT}
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -471,7 +534,7 @@ export function Dispatches() {
                         min={0}
                         max={i.dispatchedQty}
                         placeholder="0"
-                        className="bg-neutral-800 text-white border border-neutral-700 rounded px-2 py-1 text-center font-semibold w-16 focus:ring-2 focus:ring-amber-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className={NUM_LIGHT}
                       />
                     </td>
                   </tr>
@@ -484,6 +547,171 @@ export function Dispatches() {
             <div className="flex justify-between text-sm"><span className="text-neutral-500 dark:text-neutral-400">Valor de materiales usados</span><span className="font-semibold tabular-nums">{formatCurrency(liqSubtotal)}</span></div>
             <p className="text-xs text-neutral-400">El ITBIS (18% a productos), descuentos, método de pago e impresión del ticket se completan en la pantalla de Ventas.</p>
           </div>
+        </div>
+      </Modal>
+
+      {/* Cancel Confirmation Modal */}
+      <Modal
+        open={!!cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        title="Cancelar Vale de Despacho"
+        size="sm"
+        footer={
+          <div className="flex gap-3">
+            <button onClick={() => setCancelTarget(null)} className="btn-ghost flex-1">No, mantener</button>
+            <button
+              onClick={() => {
+                if (cancelTarget) doCancel(cancelTarget.id);
+                setCancelTarget(null);
+              }}
+              className="btn-danger flex-1"
+            >
+              <XCircle size={18} /> Sí, cancelar
+            </button>
+          </div>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <div className="shrink-0 w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center">
+            <AlertTriangle size={20} className="text-red-500" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">
+              ¿Está seguro de que desea cancelar el vale {cancelTarget?.code}?
+            </p>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+              Los productos despachados volverán automáticamente al inventario general.
+            </p>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Edit Dispatch Modal */}
+      <Modal
+        open={!!editId}
+        onClose={() => { setEditId(null); setEditItems([]); }}
+        title="Editar Despacho en Curso"
+        subtitle="Modifica técnico, obra o materiales antes de liquidar"
+        size="lg"
+        footer={
+          <div className="flex gap-3">
+            <button onClick={() => { setEditId(null); setEditItems([]); }} className="btn-ghost flex-1">Cancelar</button>
+            <button
+              onClick={doSaveEdit}
+              disabled={!canSaveEdit}
+              className={`btn-primary flex-1 ${!canSaveEdit ? 'opacity-40 cursor-not-allowed' : ''}`}
+            >
+              <Package size={18} /> Guardar Cambios
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Técnico / Empleado Asignado</label>
+              <select value={editTechId} onChange={(e) => setEditTechId(e.target.value)} className={SELECT_LIGHT}>
+                <option value="">Seleccionar técnico...</option>
+                {activeEmployees.map((e) => (
+                  <option key={e.id} value={e.id}>{e.firstName} {e.lastName} — {e.role}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Cliente / Obra</label>
+              <input value={editClientName} onChange={(e) => setEditClientName(e.target.value)} className="input" placeholder="Nombre del cliente o descripción de obra" />
+            </div>
+          </div>
+
+          {/* Add more products */}
+          <div>
+            <label className="label">Agregar más materiales</label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+                <input value={editProductQuery} onChange={(e) => setEditProductQuery(e.target.value)} placeholder="Buscar por nombre o SKU..." className="input pl-11" />
+              </div>
+              <select value={editProductCat} onChange={(e) => setEditProductCat(e.target.value)} className={SELECT_LIGHT_SM + ' whitespace-nowrap'}>
+                <option value="Todas">Todas las categorías</option>
+                {categories.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            {(editProductQuery || editProductCat !== 'Todas') && editableProducts.length > 0 && (
+              <div className="mt-1 rounded-xl border border-neutral-200 dark:border-neutral-700 overflow-hidden max-h-[220px] overflow-y-auto scroll-sleek">
+                {editableProducts.map((p) => (
+                  <button key={p.id} onClick={() => editAddProduct(p.id)} className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-brand-500/10 transition text-left">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-neutral-800 dark:text-neutral-100 truncate">{p.name}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="chip bg-brand-500/10 text-brand-600 dark:text-brand-400 text-[10px]">{p.category}</span>
+                        <span className="text-xs text-neutral-400">{p.code}</span>
+                        <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400">Stock: {p.stock} {p.unit === 'Metro' ? 'mt' : 'u'}</span>
+                      </div>
+                    </div>
+                    <Plus size={16} className="text-brand-500 shrink-0" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Edit existing items */}
+          {editItems.length > 0 && (
+            <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-neutral-50 dark:bg-neutral-800/40 text-xs uppercase text-neutral-500 dark:text-neutral-400">
+                    <th className="px-3 py-2 text-left font-semibold">Material</th>
+                    <th className="px-3 py-2 text-right font-semibold">Cantidad</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                  {editItems.map((i) => {
+                    const prod = products.find((p) => p.id === i.productId);
+                    const maxQty = i.dispatchedQty + (prod?.stock ?? 0);
+                    const over = i.dispatchedQty > maxQty;
+                    return (
+                      <tr key={i.productId}>
+                        <td className="px-3 py-2">
+                          <p className="font-semibold text-neutral-800 dark:text-neutral-100">{i.productName}</p>
+                          <p className="text-xs text-neutral-400">{i.productCode} · {formatCurrency(i.price)}/{i.unit}</p>
+                        </td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="number"
+                            value={i.dispatchedQty === 0 ? '' : i.dispatchedQty}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === '') { editSetQty(i.productId, 0); return; }
+                              if (!/^\d*\.?\d*$/.test(raw)) return;
+                              const v = Math.min(Number(raw) || 0, maxQty);
+                              editSetQty(i.productId, Math.max(0, v));
+                            }}
+                            onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
+                            min={0}
+                            max={maxQty}
+                            placeholder="0"
+                            className={`${NUM_LIGHT} ${over ? '!border-red-500' : ''}`}
+                          />
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <button onClick={() => editRemoveProduct(i.productId)} className="p-1.5 rounded-lg text-neutral-400 hover:text-red-500 hover:bg-red-500/10 transition">
+                            <Trash2 size={16} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {editItems.length === 0 && (
+            <p className="text-center text-sm text-neutral-400 py-6">Agrega materiales para despachar</p>
+          )}
         </div>
       </Modal>
     </div>

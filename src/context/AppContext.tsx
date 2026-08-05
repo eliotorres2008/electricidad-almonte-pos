@@ -69,6 +69,7 @@ interface AppContextValue {
   saveQuote: (q: Quote) => void;
   convertQuote: (id: string) => Quote | null;
   createDispatch: (d: Dispatch) => void;
+  updateDispatch: (id: string, updates: { employeeId?: string; employeeName?: string; customerName?: string; items?: Dispatch['items'] }) => void;
   prepareDispatchLiquidation: (id: string, items: Dispatch['items']) => void;
   finalizeDispatch: (id: string, saleId: string) => void;
   cancelDispatch: (id: string) => void;
@@ -341,6 +342,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
     addAudit(`Despacho creado — ${d.code} (${d.employeeName})`, d.cashier);
   }, [addMovement, addAudit]);
 
+  // Edit an in-progress dispatch: adjust inventory for any qty changes and update metadata.
+  const updateDispatch = useCallback((id: string, updates: { employeeId?: string; employeeName?: string; customerName?: string; items?: Dispatch['items'] }) => {
+    setDispatches((prev) => {
+      const d = prev.find((x) => x.id === id);
+      if (!d) return prev;
+      if (updates.items) {
+        const oldItems = d.items;
+        const newItems = updates.items;
+        setProducts((prevProducts) =>
+          prevProducts.map((p) => {
+            const oldLine = oldItems.find((i) => i.productId === p.id);
+            const newLine = newItems.find((i) => i.productId === p.id);
+            const oldQty = oldLine?.dispatchedQty ?? 0;
+            const newQty = newLine?.dispatchedQty ?? 0;
+            if (oldQty === newQty) return p;
+            return { ...p, stock: Math.max(0, p.stock + oldQty - newQty) };
+          }),
+        );
+        newItems.forEach((it) => {
+          const oldQty = oldItems.find((oi) => oi.productId === it.productId)?.dispatchedQty ?? 0;
+          const diff = it.dispatchedQty - oldQty;
+          if (diff !== 0) {
+            addMovement({
+              id: genId('m'),
+              productId: it.productId,
+              productName: it.productName,
+              type: diff > 0 ? 'salida' : 'entrada',
+              qty: Math.abs(diff),
+              reason: `Ajuste despacho ${d.code}`,
+              user: config.cashier,
+              timestamp: nowTs(),
+            });
+          }
+        });
+      }
+      addAudit(`Despacho editado — ${d.code}`, config.cashier);
+      return prev.map((x) => (x.id === id ? { ...x, ...updates } : x));
+    });
+  }, [addMovement, addAudit, config.cashier]);
+
   // Step 1 of liquidation: restore returned quantities to inventory immediately.
   // The dispatch stays "en_obra" until the sale is completed in the Sales module.
   const prepareDispatchLiquidation = useCallback((id: string, items: Dispatch['items']) => {
@@ -495,7 +536,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     addAudit, registerSale, addMovement, adjustStock, login, logout, toggleTheme,
     openCash, upsertCustomer, addReceivable, payReceivable,
     upsertEmployee, deleteEmployee, registerPayout, registerAdvance, logCommissions, addCashOutflow,
-    saveQuote, convertQuote, createDispatch, prepareDispatchLiquidation, finalizeDispatch, cancelDispatch,
+    saveQuote, convertQuote, createDispatch, updateDispatch, prepareDispatchLiquidation, finalizeDispatch, cancelDispatch,
     pendingDispatchCart, setPendingDispatchCart,
     canSeeCost, isCashOpen, cashBalance,
   };
