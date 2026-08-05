@@ -25,7 +25,7 @@ const nowTs = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
 export function Sales() {
   const app = useApp();
-  const { products, config, ncfSequences, customers, employees, addReceivable, upsertCustomer, registerSale, quotes, saveQuote, convertQuote, pendingDispatchCart, setPendingDispatchCart } = app;
+  const { products, config, ncfSequences, customers, employees, addReceivable, upsertCustomer, registerSale, quotes, saveQuote, convertQuote, pendingDispatchCart, setPendingDispatchCart, finalizeDispatch } = app;
 
   const [mode, setMode] = useState<'venta' | 'cotizacion'>('venta');
   const [query, setQuery] = useState('');
@@ -51,6 +51,7 @@ export function Sales() {
   const [quoteFormat, setQuoteFormat] = useState<PrintFormat>('ticket_80');
   const [viewQuote, setViewQuote] = useState<Quote | null>(null);
   const [saveQuoteToSystem, setSaveQuoteToSystem] = useState(false);
+  const [activeDispatchId, setActiveDispatchId] = useState<string | null>(null);
 
   // Credit / Fiado customer selection
   const [creditCustomerId, setCreditCustomerId] = useState('');
@@ -158,6 +159,7 @@ export function Sales() {
     if (!pendingDispatchCart) return;
     setCart(pendingDispatchCart.cart);
     setCustomerName(pendingDispatchCart.customerName);
+    setActiveDispatchId(pendingDispatchCart.dispatchId);
     setMode('venta');
     setPendingDispatchCart(null);
     // Defer opening checkout so the cart state has settled.
@@ -223,6 +225,13 @@ export function Sales() {
 
     setLastSale(sale);
     registerSale(sale);
+
+    // If this sale came from a dispatch liquidation handoff, mark the dispatch
+    // as "liquidado" only now that payment has been processed.
+    if (activeDispatchId) {
+      finalizeDispatch(activeDispatchId, sale.id);
+      setActiveDispatchId(null);
+    }
 
     if (paymentMethod === 'credito' && selectedCreditCustomer) {
       const due = new Date();
@@ -328,6 +337,7 @@ export function Sales() {
     setCreditCustomerId('');
     setQuickAddName('');
     setQuickAddPhone('');
+    setActiveDispatchId(null);
     setLastSale(null);
   };
 

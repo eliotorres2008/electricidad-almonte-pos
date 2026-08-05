@@ -69,7 +69,8 @@ interface AppContextValue {
   saveQuote: (q: Quote) => void;
   convertQuote: (id: string) => Quote | null;
   createDispatch: (d: Dispatch) => void;
-  liquidateDispatch: (id: string, items: Dispatch['items'], sale: SaleRecord) => void;
+  prepareDispatchLiquidation: (id: string, items: Dispatch['items']) => void;
+  finalizeDispatch: (id: string, saleId: string) => void;
   cancelDispatch: (id: string) => void;
 
   // Dispatch liquidation handoff: a preloaded cart + customer name that Sales consumes on mount.
@@ -340,11 +341,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     addAudit(`Despacho creado — ${d.code} (${d.employeeName})`, d.cashier);
   }, [addMovement, addAudit]);
 
-  // Liquidate a dispatch: restore returned quantities to inventory, register a sale
-  // for used quantities (without re-decrementing stock, since it was deducted at dispatch).
-  const liquidateDispatch = useCallback((id: string, items: Dispatch['items'], sale: SaleRecord) => {
-    const saleWithFlag: SaleRecord = { ...sale, skipStockDecrement: true };
-    setSales((prev) => [saleWithFlag, ...prev]);
+  // Step 1 of liquidation: restore returned quantities to inventory immediately.
+  // The dispatch stays "en_obra" until the sale is completed in the Sales module.
+  const prepareDispatchLiquidation = useCallback((id: string, items: Dispatch['items']) => {
     setProducts((prevProducts) =>
       prevProducts.map((p) => {
         const line = items.find((i) => i.productId === p.id);
@@ -361,14 +360,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
           type: 'entrada',
           qty: it.returnedQty,
           reason: `Devolución despacho ${id}`,
-          user: sale.cashier,
+          user: config.cashier,
           timestamp: nowTs(),
         });
       }
     });
-    setDispatches((prev) => prev.map((d) => (d.id === id ? { ...d, status: 'liquidado', items, liquidatedAt: nowTs(), liquidatedSaleId: sale.id } : d)));
-    addAudit(`Despacho liquidado — ${id} (Venta ${sale.ncf})`, sale.cashier);
-  }, [addMovement, addAudit]);
+    setDispatches((prev) => prev.map((d) => (d.id === id ? { ...d, items } : d)));
+    addAudit(`Devolución de materiales registrada — despacho ${id}`);
+  }, [addMovement, addAudit, config.cashier]);
+
+  // Step 2 of liquidation: mark the dispatch as "liquidado" once the sale is paid.
+  const finalizeDispatch = useCallback((id: string, saleId: string) => {
+    setDispatches((prev) => prev.map((d) => (d.id === id ? { ...d, status: 'liquidado', liquidatedAt: nowTs(), liquidatedSaleId: saleId } : d)));
+    addAudit(`Despacho liquidado — ${id} (Venta ${saleId})`);
+  }, [addAudit]);
 
   // Cancel a dispatch: restore all dispatched quantities to inventory.
   const cancelDispatch = useCallback((id: string) => {
@@ -490,7 +495,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     addAudit, registerSale, addMovement, adjustStock, login, logout, toggleTheme,
     openCash, upsertCustomer, addReceivable, payReceivable,
     upsertEmployee, deleteEmployee, registerPayout, registerAdvance, logCommissions, addCashOutflow,
-    saveQuote, convertQuote, createDispatch, liquidateDispatch, cancelDispatch,
+    saveQuote, convertQuote, createDispatch, prepareDispatchLiquidation, finalizeDispatch, cancelDispatch,
     pendingDispatchCart, setPendingDispatchCart,
     canSeeCost, isCashOpen, cashBalance,
   };

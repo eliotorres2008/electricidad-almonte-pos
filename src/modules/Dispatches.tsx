@@ -22,7 +22,7 @@ type DraftLine = {
 
 export function Dispatches() {
   const app = useApp();
-  const { dispatches, products, employees, categories, createDispatch, liquidateDispatch, cancelDispatch, addAudit, setPendingDispatchCart } = app;
+  const { dispatches, products, employees, categories, createDispatch, prepareDispatchLiquidation, finalizeDispatch, cancelDispatch, addAudit, setPendingDispatchCart } = app;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [liquidateId, setLiquidateId] = useState<string | null>(null);
@@ -129,7 +129,8 @@ export function Dispatches() {
     }));
   };
 
-  // "Finalizar y Cobrar": hand off used items + any labor to the standard Sales checkout.
+  // "Finalizar y Cobrar": hand off used items to the standard Sales checkout.
+  // The dispatch stays "en_obra" until the sale is actually paid in Sales.
   const doLiquidate = () => {
     if (!liquidateId) return;
     const d = dispatches.find((x) => x.id === liquidateId);
@@ -147,20 +148,10 @@ export function Dispatches() {
       return { product: prod, qty: i.usedQty, unit: i.unit };
     });
 
-    // Mark the dispatch as liquidado and restore returned stock immediately.
-    // The actual sale (NCF, ITBIS, payment, ticket) is completed in the Sales checkout.
-    liquidateDispatch(liquidateId, liqItems, {
-      id: genId('s'),
-      date: new Date().toISOString(),
-      items: usedItems.map((i) => ({ name: i.productName, qty: i.usedQty, price: i.price, unit: i.unit })),
-      subtotal: 0, discount: 0, itbis: 0, total: 0,
-      ncf: 'PENDIENTE', ncfType: 'B02',
-      customerDoc: '', customerName: d.customerName,
-      cashier: app.config.cashier, paymentMethod: 'efectivo',
-      skipStockDecrement: true,
-    });
+    // Restore returned stock to inventory immediately, but do NOT mark as liquidado yet.
+    prepareDispatchLiquidation(liquidateId, liqItems);
 
-    // Hand the cart off to Sales and navigate there.
+    // Hand the cart off to Sales. finalizeDispatch will be called when the sale completes.
     setPendingDispatchCart({ cart, customerName: d.customerName, dispatchId: liquidateId });
     setLiquidateId(null);
     setLiqItems([]);
@@ -192,7 +183,7 @@ export function Dispatches() {
           <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar por código, técnico u obra..." className="input pl-11" />
         </div>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as 'todos' | DispatchStatus)} className={SELECT_DARK_SM + ' lg:w-52'}>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as 'todos' | DispatchStatus)} className="input w-auto lg:w-48 whitespace-nowrap py-2.5">
           <option value="todos">Todos los estados</option>
           <option value="en_obra">En Obra</option>
           <option value="liquidado">Liquidado</option>
